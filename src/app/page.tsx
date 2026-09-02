@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { format, addDays, startOfWeek, isSameDay } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
@@ -14,7 +15,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
-  CalendarCheck
+  CalendarCheck,
+  KeyRound,
+  Trash2,
+  BarChart3
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import {
@@ -23,6 +27,8 @@ import {
   where,
   onSnapshot,
   addDoc,
+  deleteDoc,
+  doc,
   serverTimestamp
 } from "firebase/firestore";
 
@@ -34,34 +40,42 @@ interface Agendamento {
   nome: string;
   orientador: string;
   instituicao: string;
+  pin?: string;
 }
 
 export default function Home() {
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [selectedForCancel, setSelectedForCancel] = useState<Agendamento | null>(null);
+  const [cancelPinInput, setCancelPinInput] = useState("");
+  const [cancelError, setCancelError] = useState("");
+  const [canceling, setCanceling] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  // Dados do formulário
+  // Formulário de Agendamento
   const [formData, setFormData] = useState({
     nome: "",
     orientador: "",
     instituicao: "",
     horaInicio: "08:00",
     horaFim: "09:00",
+    pin: "",
   });
 
-  // Gerar dias da semana (Segunda a Sexta)
-  const startDate = startOfWeek(currentDate, { weekStartsOn: 1 }); // Começa na segunda
+  // Dias da semana (Segunda a Sexta)
+  const startDate = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = Array.from({ length: 5 }).map((_, i) => addDays(startDate, i));
 
   const selectedDateStr = format(selectedDate, "yyyy-MM-dd");
 
-  // Escutar agendamentos do dia selecionado em tempo real no Firestore
+  // Escuta em tempo real no Firestore
   useEffect(() => {
     setLoading(true);
     const q = query(
@@ -73,8 +87,8 @@ export default function Home() {
       q,
       (snapshot) => {
         const docs: Agendamento[] = [];
-        snapshot.forEach((doc) => {
-          docs.push({ id: doc.id, ...(doc.data() as Omit<Agendamento, "id">) });
+        snapshot.forEach((docSnap) => {
+          docs.push({ id: docSnap.id, ...(docSnap.data() as Omit<Agendamento, "id">) });
         });
 
         // Ordena por horário de início
@@ -101,7 +115,10 @@ export default function Home() {
       setFormData((prev) => ({
         ...prev,
         horaInicio: prefillStart,
-        horaFim: prefillStart < "21:00" ? `${(parseInt(prefillStart.slice(0, 2)) + 1).toString().padStart(2, "0")}:00` : "22:00"
+        horaFim:
+          prefillStart < "21:00"
+            ? `${(parseInt(prefillStart.slice(0, 2)) + 1).toString().padStart(2, "0")}:00`
+            : "22:00",
       }));
     }
     setIsModalOpen(true);
@@ -112,7 +129,49 @@ export default function Home() {
     setErrorMessage("");
   };
 
-  // Calcular intervalos livres entre 08:00 e 22:00
+  const handleOpenCancelModal = (ag: Agendamento) => {
+    setSelectedForCancel(ag);
+    setCancelPinInput("");
+    setCancelError("");
+    setIsCancelModalOpen(true);
+  };
+
+  const handleCloseCancelModal = () => {
+    setIsCancelModalOpen(false);
+    setSelectedForCancel(null);
+    setCancelPinInput("");
+    setCancelError("");
+  };
+
+  // Executar cancelamento
+  const handleConfirmCancel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedForCancel || !selectedForCancel.id) return;
+
+    // Senha Mestre de Coordenação: "drxufn2026"
+    const isMasterPassword = cancelPinInput.trim() === "drxufn2026";
+    const isOwnerPin = selectedForCancel.pin && cancelPinInput.trim() === selectedForCancel.pin;
+
+    if (!isMasterPassword && !isOwnerPin) {
+      setCancelError("PIN ou Senha Mestre incorreta! Tente novamente.");
+      return;
+    }
+
+    try {
+      setCanceling(true);
+      await deleteDoc(doc(db, "agendamentos", selectedForCancel.id));
+      setCanceling(false);
+      handleCloseCancelModal();
+      setSuccessMessage("Horário cancelado e liberado com sucesso!");
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (err) {
+      console.error(err);
+      setCanceling(false);
+      setCancelError("Erro ao cancelar no banco de dados. Tente novamente.");
+    }
+  };
+
+  // Calcular janelas livres entre 08:00 e 22:00
   const getIntervalosLivres = () => {
     const intervalos: { inicio: string; fim: string }[] = [];
     let cursor = "08:00";
@@ -137,21 +196,42 @@ export default function Home() {
     e.preventDefault();
     setErrorMessage("");
 
-    const { horaInicio, horaFim, nome, orientador, instituicao } = formData;
+    const { horaInicio, horaFim, nome, orientador, instituicao, pin } = formData;
 
-    // Validações básicas
+    // Validação de formato de horários
     if (horaInicio >= horaFim) {
       setErrorMessage("O horário de início deve ser menor que o horário de término.");
       return;
     }
 
     if (horaInicio < "08:00" || horaFim > "22:00") {
-      setErrorMessage("O horário deve estar entre 08:00 e 22:00.");
+      setErrorMessage("O equipamento só pode ser agendado entre 08:00 e 22:00.");
+      return;
+    }
+
+    // Regra: Antecedência mínima de 10 minutos se for hoje
+    const today = new Date();
+    if (isSameDay(selectedDate, today)) {
+      const minAvailableTime = new Date(today.getTime() + 10 * 60 * 1000); // 10 minutos no futuro
+      const minHours = minAvailableTime.getHours().toString().padStart(2, "0");
+      const minMinutes = minAvailableTime.getMinutes().toString().padStart(2, "0");
+      const minTimeStr = `${minHours}:${minMinutes}`;
+
+      if (horaInicio < minTimeStr) {
+        setErrorMessage(
+          `Para hoje, o agendamento deve ser feito com no mínimo 10 minutos de antecedência. Horário mínimo disponível: ${minTimeStr}.`
+        );
+        return;
+      }
+    }
+
+    // Validação do PIN (4 dígitos)
+    if (!/^\d{4}$/.test(pin)) {
+      setErrorMessage("O PIN de cancelamento deve ter exatamente 4 dígitos numéricos (ex: 1234).");
       return;
     }
 
     // Verificar choque / sobreposição de horários
-    // Choque ocorre se: (novoInicio < itemFim) && (novoFim > itemInicio)
     const conflito = agendamentos.find(
       (ag) => horaInicio < ag.horaFim && horaFim > ag.horaInicio
     );
@@ -172,6 +252,7 @@ export default function Home() {
         nome: nome.trim(),
         orientador: orientador.trim(),
         instituicao: instituicao.trim(),
+        pin: pin.trim(),
         criadoEm: serverTimestamp(),
       });
 
@@ -179,27 +260,27 @@ export default function Home() {
       setIsModalOpen(false);
       setSuccessMessage("Agendamento confirmado com sucesso!");
 
-      // Limpar campos de texto
       setFormData({
         nome: "",
         orientador: "",
         instituicao: "",
         horaInicio: "08:00",
         horaFim: "09:00",
+        pin: "",
       });
 
       setTimeout(() => setSuccessMessage(""), 5000);
     } catch (err) {
       console.error(err);
       setSubmitting(false);
-      setErrorMessage("Ocorreu um erro ao salvar o agendamento. Verifique se as regras do Firestore estão ativas.");
+      setErrorMessage("Ocorreu um erro ao salvar o agendamento. Tente novamente.");
     }
   };
 
   const intervalosLivres = getIntervalosLivres();
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 pb-12">
+    <div className="min-h-screen bg-slate-50 text-slate-900 pb-16">
       {/* Header Fixo Mobile-friendly */}
       <header className="bg-blue-600 text-white shadow-md sticky top-0 z-30">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -212,12 +293,22 @@ export default function Home() {
               <p className="text-xs text-blue-100">Bruker D2 • UFN</p>
             </div>
           </div>
-          <button
-            onClick={() => handleOpenModal()}
-            className="bg-white text-blue-700 hover:bg-blue-50 text-sm font-semibold px-3.5 py-1.5 rounded-lg shadow transition active:scale-95 flex items-center gap-1.5"
-          >
-            <span>+</span> Agendar
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/relatorios"
+              className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg transition flex items-center gap-1.5"
+              title="Acessar Relatórios de Uso"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="hidden sm:inline">Relatórios</span>
+            </Link>
+            <button
+              onClick={() => handleOpenModal()}
+              className="bg-white text-blue-700 hover:bg-blue-50 text-xs sm:text-sm font-semibold px-3 py-1.5 rounded-lg shadow transition active:scale-95 flex items-center gap-1"
+            >
+              <span>+</span> Agendar
+            </button>
+          </div>
         </div>
       </header>
 
@@ -267,12 +358,20 @@ export default function Home() {
                       : "bg-white text-slate-700 border-slate-200 hover:bg-blue-50/50"
                   }`}
                 >
-                  <span className={`text-[11px] font-medium uppercase ${isSelected ? "text-blue-100" : "text-slate-400"}`}>
+                  <span
+                    className={`text-[11px] font-medium uppercase ${
+                      isSelected ? "text-blue-100" : "text-slate-400"
+                    }`}
+                  >
                     {format(day, "EEE", { locale: ptBR })}
                   </span>
                   <span className="text-base font-bold mt-0.5">{format(day, "dd")}</span>
                   {isToday && (
-                    <span className={`w-1.5 h-1.5 rounded-full mt-1 ${isSelected ? "bg-white" : "bg-blue-600"}`} />
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full mt-1 ${
+                        isSelected ? "bg-white" : "bg-blue-600"
+                      }`}
+                    />
                   )}
                 </button>
               );
@@ -314,9 +413,19 @@ export default function Home() {
                         <Clock className="w-3.5 h-3.5 text-amber-700" />
                         {ag.horaInicio} às {ag.horaFim}
                       </span>
-                      <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200/60 px-2 py-0.5 rounded">
-                        Ocupado
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200/60 px-2 py-0.5 rounded">
+                          Ocupado
+                        </span>
+                        <button
+                          onClick={() => handleOpenCancelModal(ag)}
+                          className="text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition flex items-center gap-1 font-medium"
+                          title="Cancelar este horário"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Cancelar
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs text-slate-600 pt-1">
@@ -326,7 +435,9 @@ export default function Home() {
                       </div>
                       <div className="flex items-center gap-1.5">
                         <BookOpen className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span>Orientador: <strong>{ag.orientador}</strong></span>
+                        <span>
+                          Orientador: <strong>{ag.orientador}</strong>
+                        </span>
                       </div>
                       <div className="flex items-center gap-1.5 sm:col-span-2">
                         <Building className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -402,7 +513,7 @@ export default function Home() {
             </div>
 
             {/* Modal Form */}
-            <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto">
+            <form onSubmit={handleSubmit} className="p-5 space-y-3.5 overflow-y-auto">
               {errorMessage && (
                 <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-xl flex items-start gap-2 text-xs">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -423,7 +534,7 @@ export default function Home() {
                     max="21:59"
                     value={formData.horaInicio}
                     onChange={(e) => setFormData({ ...formData, horaInicio: e.target.value })}
-                    className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                    className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
                   />
                 </div>
                 <div className="space-y-1">
@@ -437,7 +548,7 @@ export default function Home() {
                     max="22:00"
                     value={formData.horaFim}
                     onChange={(e) => setFormData({ ...formData, horaFim: e.target.value })}
-                    className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                    className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
                   />
                 </div>
               </div>
@@ -450,10 +561,10 @@ export default function Home() {
                 <input
                   type="text"
                   required
-                  placeholder="Ex: João da Silva"
+                  placeholder="Seu nome completo"
                   value={formData.nome}
                   onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
-                  className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                  className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
                 />
               </div>
 
@@ -468,7 +579,7 @@ export default function Home() {
                   placeholder="Ex: Prof. Dr. Carlos Souza"
                   value={formData.orientador}
                   onChange={(e) => setFormData({ ...formData, orientador: e.target.value })}
-                  className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                  className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
                 />
               </div>
 
@@ -480,11 +591,30 @@ export default function Home() {
                 <input
                   type="text"
                   required
-                  placeholder="Ex: UFN, UFSM, Laboratório X"
+                  placeholder="Ex: UFN, UFSM, Empresa parceira"
                   value={formData.instituicao}
                   onChange={(e) => setFormData({ ...formData, instituicao: e.target.value })}
-                  className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                  className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition"
                 />
+              </div>
+
+              {/* PIN de Cancelamento (4 dígitos) */}
+              <div className="space-y-1 bg-amber-50/70 p-3 rounded-xl border border-amber-200/80">
+                <label className="text-xs font-semibold text-amber-950 flex items-center gap-1.5">
+                  <KeyRound className="w-3.5 h-3.5 text-amber-700" /> PIN de Cancelamento (4 dígitos)
+                </label>
+                <input
+                  type="password"
+                  maxLength={4}
+                  required
+                  placeholder="Ex: 1234"
+                  value={formData.pin}
+                  onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, "") })}
+                  className="w-full p-2 text-sm bg-white border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none tracking-widest text-center font-mono font-bold"
+                />
+                <p className="text-[11px] text-amber-800 leading-tight">
+                  Guarde este número para cancelar o horário caso precise.
+                </p>
               </div>
 
               <div className="pt-2">
@@ -501,6 +631,74 @@ export default function Home() {
                   ) : (
                     "Confirmar e Reservar"
                   )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Cancelamento com PIN */}
+      {isCancelModalOpen && selectedForCancel && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-rose-50/50">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-600" />
+                <h2 className="text-sm font-bold text-slate-800">Cancelar Agendamento</h2>
+              </div>
+              <button
+                onClick={handleCloseCancelModal}
+                className="w-7 h-7 rounded-full text-slate-400 hover:bg-slate-200 flex items-center justify-center transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmCancel} className="p-5 space-y-4">
+              <div className="text-xs text-slate-600 space-y-1 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div><strong>Operador:</strong> {selectedForCancel.nome}</div>
+                <div>
+                  <strong>Horário:</strong> {selectedForCancel.horaInicio} às {selectedForCancel.horaFim}
+                </div>
+                <div><strong>Orientador:</strong> {selectedForCancel.orientador}</div>
+              </div>
+
+              {cancelError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2.5 rounded-lg text-xs flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{cancelError}</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
+                  <KeyRound className="w-3.5 h-3.5 text-slate-500" /> Digite o PIN de 4 dígitos (ou Senha Mestre):
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="PIN cadastrado"
+                  value={cancelPinInput}
+                  onChange={(e) => setCancelPinInput(e.target.value)}
+                  className="w-full p-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none text-center font-mono font-bold tracking-widest"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleCloseCancelModal}
+                  className="w-1/2 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-100 transition"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="submit"
+                  disabled={canceling}
+                  className="w-1/2 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-60"
+                >
+                  {canceling ? <Loader2 className="w-4 h-4 animate-spin" /> : "Confirmar Cancelamento"}
                 </button>
               </div>
             </form>
