@@ -191,11 +191,20 @@ export default function RelatoriosPage() {
             <ArrowLeft className="w-4 h-4" />
             <span>Voltar para Agenda</span>
           </Link>
-          <div className="text-right">
-            <h1 className="text-sm font-bold leading-tight flex items-center gap-1.5 justify-end">
-              <BarChart3 className="w-4 h-4" /> Relatórios de Uso
-            </h1>
-            <p className="text-[11px] text-blue-100">Destinatário: drx@ufn.edu.br</p>
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl overflow-hidden border border-white/30 shadow-xs shrink-0 bg-white/10 hidden sm:block">
+              <img
+                src="/bruker-d2.png"
+                alt="Bruker D2 Phaser"
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="text-right">
+              <h1 className="text-sm font-bold leading-tight flex items-center gap-1.5 justify-end">
+                <BarChart3 className="w-4 h-4" /> Relatórios de Uso
+              </h1>
+              <p className="text-[11px] text-blue-100">Destinatário: drx@ufn.edu.br</p>
+            </div>
           </div>
         </div>
       </header>

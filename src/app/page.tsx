@@ -285,12 +285,16 @@ export default function Home() {
       <header className="bg-blue-600 text-white shadow-md sticky top-0 z-30">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-blue-700/80 rounded-lg">
-              <CalendarCheck className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-xl overflow-hidden border-2 border-white/30 shadow-xs shrink-0 bg-white/10">
+              <img
+                src="/bruker-d2.png"
+                alt="Bruker D2 Phaser"
+                className="w-full h-full object-cover"
+              />
             </div>
             <div>
               <h1 className="text-lg font-bold leading-tight">Agenda DRX</h1>
-              <p className="text-xs text-blue-100">Bruker D2 • UFN</p>
+              <p className="text-xs text-blue-100">Bruker D2 Phaser • UFN</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
