@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Agendamentos do DRX Bruker D2 (sistema aberto, sem login)
+    match /agendamentos/{agendamentoId} {
+      // Qualquer pessoa pode consultar a agenda e os relatórios
+      allow read: if true;
+
+      // Criação: somente com os campos esperados e formatos válidos
+      allow create: if request.resource.data.keys().hasAll(
+                         ['data', 'horaInicio', 'horaFim', 'nome', 'orientador', 'instituicao', 'pin'])
+                    && request.resource.data.keys().hasOnly(
+                         ['data', 'horaInicio', 'horaFim', 'nome', 'orientador', 'instituicao', 'pin', 'criadoEm'])
+                    && request.resource.data.data is string
+                    && request.resource.data.data.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+                    && request.resource.data.horaInicio is string
+                    && request.resource.data.horaInicio.matches('^[0-9]{2}:[0-9]{2}$')
+                    && request.resource.data.horaFim is string
+                    && request.resource.data.horaFim.matches('^[0-9]{2}:[0-9]{2}$')
+                    && request.resource.data.horaInicio < request.resource.data.horaFim
+                    && request.resource.data.horaInicio >= '08:00'
+                    && request.resource.data.horaFim <= '22:00'
+                    && request.resource.data.nome is string
+                    && request.resource.data.nome.size() > 0
+                    && request.resource.data.nome.size() <= 120
+                    && request.resource.data.orientador is string
+                    && request.resource.data.orientador.size() > 0
+                    && request.resource.data.orientador.size() <= 120
+                    && request.resource.data.instituicao is string
+                    && request.resource.data.instituicao.size() > 0
+                    && request.resource.data.instituicao.size() <= 120
+                    && request.resource.data.pin is string
+                    && request.resource.data.pin.matches('^[0-9]{4}$');
+
+      // Cancelamento (o PIN é conferido na interface); edição não é permitida
+      allow delete: if true;
+      allow update: if false;
+    }
+
+    // Todo o resto fica bloqueado
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
